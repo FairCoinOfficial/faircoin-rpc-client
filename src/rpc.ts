@@ -85,6 +85,7 @@ export type FetchLike = (
     method: 'POST';
     headers: Record<string, string>;
     body: string;
+    signal?: AbortSignal;
   },
 ) => Promise<{
   ok: boolean;
@@ -103,7 +104,16 @@ export interface FaircoinRpcClientOptions {
   rpcScheme?: string;
   /** Override the fetch implementation (useful for tests, proxies, retries). */
   fetchImpl?: FetchLike;
+  /**
+   * Abort a call after this many milliseconds. A wedged or slow node must never
+   * hang a caller indefinitely, so requests are time-bounded. Defaults to
+   * {@link DEFAULT_RPC_TIMEOUT_MS}. Set `0` to disable.
+   */
+  timeoutMs?: number;
 }
+
+/** Default per-call timeout: a healthy node answers in milliseconds. */
+export const DEFAULT_RPC_TIMEOUT_MS = 10_000;
 
 function resolveUrl(opts: FaircoinRpcClientOptions, fallback: NetworkConfig): string {
   if (opts.url) return opts.url;
@@ -121,6 +131,7 @@ export class FaircoinRpcClient {
   private readonly url: string;
   private readonly authHeader: string;
   private readonly fetchImpl: FetchLike;
+  private readonly timeoutMs: number;
 
   constructor(options: FaircoinRpcClientOptions & { rpcUser: string; rpcPass: string }) {
     const baseline: NetworkConfig = {
@@ -137,6 +148,7 @@ export class FaircoinRpcClient {
       throw new Error('FaircoinRpcClient requires a fetch implementation (Node >=20 or options.fetchImpl).');
     }
     this.fetchImpl = runtimeFetch;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
   }
 
   /**
@@ -151,14 +163,31 @@ export class FaircoinRpcClient {
       id: 'faircoin-rpc-client',
     };
 
-    const response = await this.fetchImpl(this.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: this.authHeader,
-      },
-      body: JSON.stringify(body),
-    });
+    // Bound the request so a wedged or unreachable node can never hang the
+    // caller. `AbortController` cancels the underlying socket on timeout.
+    const controller = this.timeoutMs > 0 ? new AbortController() : undefined;
+    const timer =
+      controller !== undefined ? setTimeout(() => controller.abort(), this.timeoutMs) : undefined;
+
+    let response: Awaited<ReturnType<FetchLike>>;
+    try {
+      response = await this.fetchImpl(this.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: this.authHeader,
+        },
+        body: JSON.stringify(body),
+        signal: controller?.signal,
+      });
+    } catch (error) {
+      if (controller?.signal.aborted) {
+        throw new Error(`RPC ${method} timed out after ${this.timeoutMs}ms`);
+      }
+      throw error;
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
 
     if (!response.ok) {
       throw new Error(`RPC HTTP ${response.status}: ${response.statusText}`);
@@ -183,6 +212,8 @@ export function createClientForNetwork(
   overrides: Partial<FaircoinRpcClientOptions> = {},
 ): FaircoinRpcClient {
   const config = readNetworkConfigFromEnv(network, env);
+  const envTimeout = env.FAIRCOIN_RPC_TIMEOUT_MS;
+  const parsedTimeout = envTimeout !== undefined ? Number(envTimeout) : undefined;
   return new FaircoinRpcClient({
     rpcUser: overrides.rpcUser ?? config.rpcUser,
     rpcPass: overrides.rpcPass ?? config.rpcPass,
@@ -191,6 +222,9 @@ export function createClientForNetwork(
     rpcScheme: overrides.rpcScheme ?? config.rpcScheme,
     url: overrides.url,
     fetchImpl: overrides.fetchImpl,
+    timeoutMs:
+      overrides.timeoutMs ??
+      (parsedTimeout !== undefined && Number.isFinite(parsedTimeout) ? parsedTimeout : undefined),
   });
 }
 

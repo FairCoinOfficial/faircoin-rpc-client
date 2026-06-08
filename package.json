@@ -1,6 +1,6 @@
 {
   "name": "@fairco.in/rpc-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "JSON-RPC client for the FairCoin daemon (faircoind). Zero-dependency, pure TypeScript, Node 20+.",
   "author": "FairCoin <dev@fairco.in>",
   "license": "MIT",

@@ -210,3 +210,37 @@ describe('createClientForNetwork', () => {
     expect(call.url).toBe('http://tn.example:46375/');
   });
 });
+
+describe('request timeout', () => {
+  test('aborts a call that exceeds timeoutMs', async () => {
+    // A fetch that never resolves until the client aborts it via the signal.
+    const slowFetch: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          const err = new Error('aborted');
+          (err as { name: string }).name = 'AbortError';
+          reject(err);
+        });
+      });
+    const client = new FaircoinRpcClient({
+      rpcUser: 'u',
+      rpcPass: 'p',
+      url: 'http://node/',
+      fetchImpl: slowFetch,
+      timeoutMs: 50,
+    });
+    await expect(client.call('getblockcount')).rejects.toThrow(/timed out after 50ms/);
+  });
+
+  test('a fast call resolves normally under the timeout', async () => {
+    const { fetchImpl } = makeMockFetch(() => ({ json: { result: 42, error: null } }));
+    const client = new FaircoinRpcClient({
+      rpcUser: 'u',
+      rpcPass: 'p',
+      url: 'http://node/',
+      fetchImpl,
+      timeoutMs: 1000,
+    });
+    expect(await client.call<number>('getblockcount')).toBe(42);
+  });
+});
