@@ -201,6 +201,13 @@ export class FaircoinRpcClient {
   }
 }
 
+/** Parse a millisecond timeout from an env string; `undefined` if unset or not a finite number. */
+function parseTimeoutMs(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const ms = Number(raw);
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
 /**
  * Build a client for a named FairCoin network using environment variables.
  * Reads `FAIRCOIN_RPC_*` for mainnet and `FAIRCOIN_TESTNET_RPC_*` for
@@ -212,8 +219,6 @@ export function createClientForNetwork(
   overrides: Partial<FaircoinRpcClientOptions> = {},
 ): FaircoinRpcClient {
   const config = readNetworkConfigFromEnv(network, env);
-  const envTimeout = env.FAIRCOIN_RPC_TIMEOUT_MS;
-  const parsedTimeout = envTimeout !== undefined ? Number(envTimeout) : undefined;
   return new FaircoinRpcClient({
     rpcUser: overrides.rpcUser ?? config.rpcUser,
     rpcPass: overrides.rpcPass ?? config.rpcPass,
@@ -222,9 +227,7 @@ export function createClientForNetwork(
     rpcScheme: overrides.rpcScheme ?? config.rpcScheme,
     url: overrides.url,
     fetchImpl: overrides.fetchImpl,
-    timeoutMs:
-      overrides.timeoutMs ??
-      (parsedTimeout !== undefined && Number.isFinite(parsedTimeout) ? parsedTimeout : undefined),
+    timeoutMs: overrides.timeoutMs ?? parseTimeoutMs(env.FAIRCOIN_RPC_TIMEOUT_MS),
   });
 }
 
